@@ -1,6 +1,10 @@
 # CZDB Search Golang
 
-一个用于搜索CZDB格式IP数据库的Go语言实现。
+[![Go Reference](https://pkg.go.dev/badge/github.com/tagphi/czdb-search-golang.svg)](https://pkg.go.dev/github.com/tagphi/czdb-search-golang)
+[![Go Report Card](https://goreportcard.com/badge/github.com/tagphi/czdb-search-golang)](https://goreportcard.com/report/github.com/tagphi/czdb-search-golang)
+[![License](https://img.shields.io/github/license/tagphi/czdb-search-golang)](https://github.com/tagphi/czdb-search-golang/blob/main/LICENSE)
+
+一个用于搜索CZDB格式IP数据库的Go语言实现。提供高效的IP地址查询功能，支持内存模式和B树模式两种查询方式。
 
 ## 安装
 
@@ -41,6 +45,15 @@ func main() {
 }
 ```
 
+更多示例请参考 [examples](./examples) 目录。
+
+## 特性
+
+- **两种搜索模式**：支持内存模式和B树模式
+- **高性能**：内存模式下性能极高，适合高并发场景
+- **简单API**：提供易于使用的API接口
+- **线程安全**：内存模式下完全线程安全
+
 ## 项目结构
 
 ```
@@ -55,11 +68,12 @@ czdb-search-golang/
 │   │   └── hyper_header_block.go  # 头部块定义和解析功能
 │   └── utils/          # 工具函数
 │       └── byte_utils.go          # 字节处理工具函数
+├── examples/           # 使用示例
 ├── go.mod              # Go模块定义
 └── README.md           # 项目说明
 ```
 
-## 编译和运行
+## 编译和运行命令行工具
 
 编译项目：
 
@@ -100,6 +114,20 @@ go build -o cz88-search ./cmd/main/main.go
 - 对于需要高性能的应用，使用Memory模式
 - 如果需要在多线程环境中使用Btree模式，每个线程应该创建自己的DBSearcher实例
 
+## 测试
+
+运行单元测试：
+
+```bash
+go test ./...
+```
+
+运行带覆盖率的测试：
+
+```bash
+go test -cover ./...
+```
+
 ## CZDB格式规范
 
 CZDB文件格式由以下几个部分组成：
@@ -119,4 +147,12 @@ CZDB文件格式由以下几个部分组成：
 
 ```go
 require github.com/tagphi/czdb-search-golang v1.0.0
-``` 
+```
+
+## 贡献指南
+
+欢迎提交问题和贡献代码！请确保您的代码符合Go的代码规范，并且添加了适当的测试。
+
+## 许可证
+
+Apache License 2.0 

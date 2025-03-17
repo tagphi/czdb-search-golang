@@ -20,15 +20,17 @@ const (
 	HeaderBlockLength  = 20 // 头部块长度，16 字节 IP + 4 字节数据指针
 )
 
-// SearchType 表示搜索类型
+// SearchType 表示IP数据库的搜索模式
 type SearchType int
 
 const (
-	MEMORY SearchType = iota // 内存模式
-	BTREE                    // B-tree模式
+	// MEMORY 表示内存模式，数据库完全加载到内存中
+	MEMORY SearchType = iota
+	// BTREE 表示B树模式，按需从数据库文件读取数据
+	BTREE
 )
 
-// SuperBlock 表示超级块
+// SuperBlock 表示CZDB文件的超级块结构
 type SuperBlock struct {
 	DbType          byte   // 数据库类型 (0 表示 IPv4, 1 表示 IPv6)
 	DbSize          int32  // 数据库大小
@@ -37,14 +39,14 @@ type SuperBlock struct {
 	EndIndexPtr     int32  // 结束索引指针
 }
 
-// BtreeModeParam 表示B-tree模式参数
+// BtreeModeParam 包含B树模式下的搜索参数
 type BtreeModeParam struct {
 	HeaderLength int      // 头部长度
 	HeaderPtr    []int32  // 头部指针
 	HeaderSip    [][]byte // 头部起始IP
 }
 
-// DBSearcher 表示数据库搜索器
+// DBSearcher 是CZDB文件的搜索器，包含了搜索所需的所有状态
 type DBSearcher struct {
 	IPType          int32       // IP地址类型 (IPv4 或 IPv6)
 	SearchType      SearchType  // 搜索类型 (BTREE 或 MEMORY)
@@ -277,7 +279,16 @@ func loadGeoMapping(dbSearcher *DBSearcher, offset int64) error {
 	return nil
 }
 
-// 初始化数据库搜索器
+// InitDBSearcher 初始化数据库搜索器
+//
+// 参数:
+//   - dbPath: 数据库文件路径
+//   - key: 数据库解密密钥
+//   - searchType: 搜索类型 (MEMORY 或 BTREE)
+//
+// 返回:
+//   - *DBSearcher: 初始化后的数据库搜索器
+//   - error: 如果初始化失败则返回错误
 func InitDBSearcher(dbPath string, key string, searchType SearchType) (*DBSearcher, error) {
 	// 打开数据库文件
 	file, err := os.Open(dbPath)
@@ -380,7 +391,15 @@ func InitDBSearcher(dbPath string, key string, searchType SearchType) (*DBSearch
 	return dbSearcher, nil
 }
 
-// 搜索IP地址
+// Search 搜索IP地址对应的地理位置信息
+//
+// 参数:
+//   - ip: 要查询的IP地址字符串
+//   - dbSearcher: 数据库搜索器实例
+//
+// 返回:
+//   - string: 地理位置信息
+//   - error: 如果搜索失败则返回错误
 func Search(ip string, dbSearcher *DBSearcher) (string, error) {
 	if dbSearcher == nil {
 		return "", fmt.Errorf("dbSearcher is nil")
@@ -396,7 +415,16 @@ func Search(ip string, dbSearcher *DBSearcher) (string, error) {
 	return "", fmt.Errorf("unsupported search type")
 }
 
-// TreeSearch 统一的搜索函数，使用 memoryMode 标志指示数据源
+// TreeSearch 执行树搜索算法查找IP地址
+//
+// 参数:
+//   - dbSearcher: 数据库搜索器实例
+//   - ip: 要查询的IP地址字符串
+//   - memoryMode: 是否使用内存模式
+//
+// 返回:
+//   - string: 地理位置信息
+//   - error: 如果搜索失败则返回错误
 func TreeSearch(dbSearcher *DBSearcher, ip string, memoryMode bool) (string, error) {
 	// 检查IP类型
 	ipLong, err := ipToUint32(ip)
@@ -608,13 +636,29 @@ func TreeSearch(dbSearcher *DBSearcher, ip string, memoryMode bool) (string, err
 	return geoData, nil
 }
 
-// 内存模式搜索
+// MemorySearch 在内存模式下搜索IP地址
+//
+// 参数:
+//   - dbSearcher: 数据库搜索器实例
+//   - ip: 要查询的IP地址字符串
+//
+// 返回:
+//   - string: 地理位置信息
+//   - error: 如果搜索失败则返回错误
 func MemorySearch(dbSearcher *DBSearcher, ip string) (string, error) {
 	// 已被合并到 TreeSearch 中，保留此函数以保持向后兼容
 	return TreeSearch(dbSearcher, ip, true)
 }
 
-// B-tree模式搜索
+// BTreeSearch 在B树模式下搜索IP地址
+//
+// 参数:
+//   - dbSearcher: 数据库搜索器实例
+//   - ip: 要查询的IP地址字符串
+//
+// 返回:
+//   - string: 地理位置信息
+//   - error: 如果搜索失败则返回错误
 func BTreeSearch(dbSearcher *DBSearcher, ip string) (string, error) {
 	// 已被合并到 TreeSearch 中，保留此函数以保持向后兼容
 	return TreeSearch(dbSearcher, ip, false)
@@ -700,7 +744,10 @@ func cleanString(s string) string {
 	return result.String()
 }
 
-// 关闭数据库搜索器
+// CloseDBSearcher 关闭数据库搜索器并释放相关资源
+//
+// 参数:
+//   - dbSearcher: 要关闭的数据库搜索器实例
 func CloseDBSearcher(dbSearcher *DBSearcher) {
 	if dbSearcher == nil {
 		return
@@ -710,7 +757,10 @@ func CloseDBSearcher(dbSearcher *DBSearcher) {
 	}
 }
 
-// Info 函数输出数据库信息
+// Info 打印数据库信息到标准输出
+//
+// 参数:
+//   - dbSearcher: 数据库搜索器实例
 func Info(dbSearcher *DBSearcher) {
 	utils.Debugln("\n=========== Database Information ===========")
 	utils.Debug("IP Type: %d\n", dbSearcher.IPType)
