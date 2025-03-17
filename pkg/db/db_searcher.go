@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -173,24 +174,54 @@ func loadGeoMapping(dbSearcher *DBSearcher, offset int64) error {
 	file := dbSearcher.File
 	endIndexPtr := dbSearcher.EndIndexPtr
 	
-	// 计算地理数据起始位置 - 修正为正确位置
-	// 地理数据位于索引段之后，索引段开始于 SuperPartLength，结束于 EndIndexPtr
+	// 检查 endIndexPtr 是否有效
 	if endIndexPtr <= 0 {
 		return fmt.Errorf("invalid end index pointer: %d", endIndexPtr)
 	}
 	
-	geoDataStart := offset + int64(SuperPartLength) + int64(endIndexPtr)
+	// 计算 ColumnSelection 的位置
+	columnSelectionPtr := offset + int64(endIndexPtr) + int64(dbSearcher.IPBytesLength*2+5)
+	
+	// 读取 ColumnSelection
+	_, err := file.Seek(columnSelectionPtr, io.SeekStart)
+	if err != nil {
+		return fmt.Errorf("failed to seek to column selection position: %v", err)
+	}
+	
+	columnSelectionBytes := make([]byte, 4)
+	bytesRead, err := file.Read(columnSelectionBytes)
+	if err != nil {
+		return fmt.Errorf("failed to read column selection: %v", err)
+	}
+	if bytesRead < 4 {
+		return fmt.Errorf("incomplete column selection read: %d of 4 bytes", bytesRead)
+	}
+	
+	// 设置 ColumnSelection
+	dbSearcher.ColumnSelection = utils.GetIntLong(columnSelectionBytes, 0)
+	fmt.Printf("Debug: Column Selection: %d\n", dbSearcher.ColumnSelection)
+	
+	// column selection == 0 表示不使用地理映射
+	if dbSearcher.ColumnSelection == 0 {
+		fmt.Println("Warning: Column Selection is 0, not using geo mapping")
+		dbSearcher.GeoMapData = make([]byte, 0)
+		return nil
+	}
+	
+	// 计算地理数据起始位置 - 修正为正确位置
+	// 地理数据位于 ColumnSelection 之后
+	geoDataStart := columnSelectionPtr + 4
 	fmt.Printf("Debug: Geo data start position: %d\n", geoDataStart)
 	
 	// 跳转到地理数据起始位置
-	_, err := file.Seek(geoDataStart, io.SeekStart)
+	_, err = file.Seek(geoDataStart, io.SeekStart)
 	if err != nil {
 		return fmt.Errorf("failed to seek to geo data position: %v", err)
 	}
 	
 	// 读取地理数据大小
 	geoSizeBytes := make([]byte, 4)
-	bytesRead, err := file.Read(geoSizeBytes)
+	bytesRead, err = file.Read(geoSizeBytes)
 	if err != nil {
 		return fmt.Errorf("failed to read geo size: %v", err)
 	}
@@ -502,14 +533,37 @@ func MemorySearch(dbSearcher *DBSearcher, ip string) (string, error) {
 		return "", fmt.Errorf("geo pointer out of bounds: ptr=%d, len=%d, dataSize=%d",
 			dataPtr, dataLen, len(dbSearcher.GeoMapData))
 	}
-	
+
 	if int(dataPtr) + int(dataLen) > len(dbSearcher.GeoMapData) {
 		return "", fmt.Errorf("geo data exceeds buffer bounds: ptr=%d, len=%d, dataSize=%d",
 			dataPtr, dataLen, len(dbSearcher.GeoMapData))
 	}
 	
-	// 提取地理数据并清理
-	geoData := string(dbSearcher.GeoMapData[dataPtr : dataPtr + uint32(dataLen)])
+	// 从数据库二进制文件中读取数据
+	data := make([]byte, dataLen)
+	
+	// 从内存或文件中复制数据
+	if dbSearcher.SearchType == MEMORY {
+		copy(data, dbSearcher.DBBin[dataPtr:dataPtr+uint32(dataLen)])
+	} else {
+		// 如果不是内存模式，从文件读取
+		_, err := dbSearcher.File.Seek(int64(dataPtr)+dbSearcher.FileOffset, io.SeekStart)
+		if err != nil {
+			return "", fmt.Errorf("failed to seek to data position: %v", err)
+		}
+		_, err = dbSearcher.File.Read(data)
+		if err != nil {
+			return "", fmt.Errorf("failed to read data: %v", err)
+		}
+	}
+	
+	// 获取地理信息
+	geoData, err := GetActualGeo(dbSearcher.GeoMapData, dbSearcher.ColumnSelection, int(dataPtr), int(dataLen), data, int(dataLen))
+	if err != nil {
+		return "", fmt.Errorf("failed to get geo data: %v", err)
+	}
+	
+	// 清理结果字符串，移除非打印字符
 	geoData = cleanString(geoData)
 	
 	return geoData, nil
@@ -619,9 +673,13 @@ func BTreeSearch(dbSearcher *DBSearcher, ip string) (string, error) {
 		if l < param.HeaderLength {
 			sptr = param.HeaderPtr[l-1]
 			eptr = param.HeaderPtr[l]
-		} else if h >= 0 {
+		} else if h >= 0 && h+1 < param.HeaderLength {
 			sptr = param.HeaderPtr[h]
 			eptr = param.HeaderPtr[h+1]
+		} else { // 搜索到最后一个头部行，可能在最后一个索引块
+			sptr = param.HeaderPtr[param.HeaderLength-1]
+			blockLen := int32(dbSearcher.IPBytesLength*2 + 5) // 索引块长度
+			eptr = sptr + blockLen
 		}
 	}
 	
@@ -634,7 +692,7 @@ func BTreeSearch(dbSearcher *DBSearcher, ip string) (string, error) {
 	blen := dbSearcher.IndexLength
 	
 	// 从文件读取索引
-	_, err = dbSearcher.File.Seek(int64(sptr)+dbSearcher.FileOffset+int64(SuperPartLength), io.SeekStart)
+	_, err = dbSearcher.File.Seek(int64(sptr)+dbSearcher.FileOffset, io.SeekStart)
 	if err != nil {
 		return "", fmt.Errorf("failed to seek to index position: %v", err)
 	}
@@ -658,7 +716,7 @@ func BTreeSearch(dbSearcher *DBSearcher, ip string) (string, error) {
 		m := (l + h) / 2
 		offset := m * int(blen)
 		
-		if offset >= len(indexBuffer) {
+		if offset+int(dbSearcher.IPBytesLength)*2+5 > len(indexBuffer) {
 			break
 		}
 		
@@ -666,59 +724,28 @@ func BTreeSearch(dbSearcher *DBSearcher, ip string) (string, error) {
 		startIP := indexBuffer[offset:offset+dbSearcher.IPBytesLength]
 		endIP := indexBuffer[offset+dbSearcher.IPBytesLength:offset+dbSearcher.IPBytesLength*2]
 		
-		// 比较IP
-		if dbSearcher.IPType == int32(utils.IPV4) {
-			// 对于IPv4
-			startIPLong := uint32(startIP[0])<<24 | uint32(startIP[1])<<16 | uint32(startIP[2])<<8 | uint32(startIP[3])
-			endIPLong := uint32(endIP[0])<<24 | uint32(endIP[1])<<16 | uint32(endIP[2])<<8 | uint32(endIP[3])
+		// 使用统一的比较方法，无论是IPv4还是IPv6
+		cmpStart := compareBytes(ipBytes, startIP, dbSearcher.IPBytesLength)
+		cmpEnd := compareBytes(ipBytes, endIP, dbSearcher.IPBytesLength)
+		
+		if cmpStart >= 0 && cmpEnd <= 0 {
+			// IP在这个块中
+			dataPos := offset + dbSearcher.IPBytesLength*2
 			
-			if ipLong < startIPLong {
-				h = m - 1
-			} else if ipLong > endIPLong {
-				l = m + 1
-			} else {
-				// IP在范围内
-				dataPos := offset + dbSearcher.IPBytesLength*2
-				
-				// 读取数据长度(1字节)和指针(3字节)，符合白皮书描述
-				dataLen = indexBuffer[dataPos]
-				
-				// 指针是3字节小端序
-				dataPtr = uint32(indexBuffer[dataPos+1]) |
-					uint32(indexBuffer[dataPos+2])<<8 |
-					uint32(indexBuffer[dataPos+3])<<16
-				
-				fmt.Printf("Debug: Found data pointer in btree mode: len=%d, ptr=%d\n", dataLen, dataPtr)
-				
-				found = true
-				break
-			}
+			// 获取4字节的数据指针和1字节的数据长度
+			dataPtr = uint32(utils.GetIntLong(indexBuffer, dataPos))
+			dataLen = uint8(utils.GetInt1(indexBuffer, dataPos+4))
+			
+			fmt.Printf("Debug: Found data pointer in btree mode: len=%d, ptr=%d\n", dataLen, dataPtr)
+			
+			found = true
+			break
+		} else if cmpStart < 0 {
+			// IP小于此块，在左半部分搜索
+			h = m - 1
 		} else {
-			// 对于IPv6
-			cmpStart := compareBytes(ipBytes, startIP, dbSearcher.IPBytesLength)
-			cmpEnd := compareBytes(ipBytes, endIP, dbSearcher.IPBytesLength)
-			
-			if cmpStart < 0 {
-				h = m - 1
-			} else if cmpEnd > 0 {
-				l = m + 1
-			} else {
-				// IP在范围内
-				dataPos := offset + dbSearcher.IPBytesLength*2
-				
-				// 读取数据长度(1字节)和指针(3字节)，符合白皮书描述
-				dataLen = indexBuffer[dataPos]
-				
-				// 指针是3字节小端序
-				dataPtr = uint32(indexBuffer[dataPos+1]) |
-					uint32(indexBuffer[dataPos+2])<<8 |
-					uint32(indexBuffer[dataPos+3])<<16
-				
-				fmt.Printf("Debug: Found data pointer in btree mode: len=%d, ptr=%d\n", dataLen, dataPtr)
-				
-				found = true
-				break
-			}
+			// IP大于此块，在右半部分搜索
+			l = m + 1
 		}
 	}
 	
@@ -742,9 +769,24 @@ func BTreeSearch(dbSearcher *DBSearcher, ip string) (string, error) {
 			dataPtr, dataLen, len(dbSearcher.GeoMapData))
 	}
 	
-	// 提取地理数据并清理
-	geoData := string(dbSearcher.GeoMapData[dataPtr:dataPtr+uint32(dataLen)])
-	geoData = cleanString(geoData)
+	// 从文件读取数据
+	data := make([]byte, dataLen)
+	
+	// 从文件中读取数据
+	_, err = dbSearcher.File.Seek(int64(dataPtr)+dbSearcher.FileOffset, io.SeekStart)
+	if err != nil {
+		return "", fmt.Errorf("failed to seek to data position: %v", err)
+	}
+	_, err = dbSearcher.File.Read(data)
+	if err != nil {
+		return "", fmt.Errorf("failed to read data: %v", err)
+	}
+	
+	// 获取地理信息
+	geoData, err := GetActualGeo(dbSearcher.GeoMapData, dbSearcher.ColumnSelection, int(dataPtr), int(dataLen), data, int(dataLen))
+	if err != nil {
+		return "", fmt.Errorf("failed to get geo data: %v", err)
+	}
 	
 	return geoData, nil
 }
@@ -755,8 +797,13 @@ func compareBytes(bytes1, bytes2 []byte, length int) int {
 		if i >= len(bytes1) || i >= len(bytes2) {
 			break
 		}
-		if bytes1[i] != bytes2[i] {
-			return int(bytes1[i]) - int(bytes2[i])
+		
+		// 直接比较无符号字节值，这符合Go的byte(uint8)性质
+		// 并且适用于IP地址比较（IP地址字节通常被视为无符号值）
+		if bytes1[i] < bytes2[i] {
+			return -1
+		} else if bytes1[i] > bytes2[i] {
+			return 1
 		}
 	}
 	return 0
@@ -827,44 +874,87 @@ func Decrypt(encryptedBytes []byte, key string) []byte {
 }
 
 // 获取地理信息
-func GetActualGeo(geoMapData []byte, columnSelection int32, geoPtr int, geoLen int, buf []byte, bufSize int) (int, error) {
+func GetActualGeo(geoMapData []byte, columnSelection int32, geoPtr int, geoLen int, data []byte, dataLen int) (string, error) {
 	if len(geoMapData) == 0 {
-		copy(buf, []byte("No geo data available"))
-		return len("No geo data available"), nil
+		return "No geo data available", nil
 	}
 	
 	if geoPtr+geoLen > len(geoMapData) {
-		errMsg := fmt.Sprintf("Geo pointer out of bounds: ptr=%d, len=%d, dataSize=%d", geoPtr, geoLen, len(geoMapData))
-		copy(buf, []byte(errMsg))
-		return len(errMsg), nil
+		return "", fmt.Errorf("Geo pointer out of bounds: ptr=%d, len=%d, dataSize=%d", geoPtr, geoLen, len(geoMapData))
 	}
 	
-	geoBytes := geoMapData[geoPtr : geoPtr+geoLen]
-	return Unpack(geoBytes, columnSelection, buf, bufSize)
+	// 使用msgpack直接解码，类似Java实现
+	dec := msgpack.NewDecoder(bytes.NewReader(data))
+	
+	// 解包第一个值：geoPosMixSize (uint64)
+	geoPosMixSize, err := dec.DecodeUint64()
+	if err != nil {
+		return "", fmt.Errorf("failed to decode geoPosMixSize: %v", err)
+	}
+	
+	// 解包第二个值：otherData (string)
+	otherData, err := dec.DecodeString()
+	if err != nil {
+		return "", fmt.Errorf("failed to decode otherData: %v", err)
+	}
+	
+	// 如果geoPosMixSize为0，直接返回otherData
+	if geoPosMixSize == 0 {
+		return otherData, nil
+	}
+	
+	// 提取地理指针和长度
+	dataLen = int((geoPosMixSize >> 24) & 0xFF)
+	dataPtr := int(geoPosMixSize & 0x00FFFFFF)
+	
+	// 检查索引是否有效
+	if dataPtr < 0 || dataPtr+dataLen > len(geoMapData) {
+		return otherData, nil // 索引无效时返回otherData
+	}
+	
+	// 从geoMapData中读取地理数据
+	regionData := geoMapData[dataPtr : dataPtr+dataLen]
+	
+	// 使用新的解码器解包地理数据
+	geoDec := msgpack.NewDecoder(bytes.NewReader(regionData))
+	
+	// 读取数组头，获取列数
+	columnNumber, err := geoDec.DecodeArrayLen()
+	if err != nil {
+		return otherData, fmt.Errorf("failed to decode column array: %v", err)
+	}
+	
+	// 构建结果
+	var sb strings.Builder
+	
+	// 遍历所有列
+	for i := 0; i < columnNumber; i++ {
+		// 检查列是否被选中
+		columnSelected := (columnSelection >> (i + 1) & 1) == 1
+		
+		// 解码列值（字符串）
+		value, err := geoDec.DecodeString()
+		if err != nil {
+			return otherData, fmt.Errorf("failed to decode column %d: %v", i, err)
+		}
+		
+		// 处理空值
+		if value == "" {
+			value = "null"
+		}
+		
+		// 如果列被选中，添加到结果中
+		if columnSelected {
+			sb.WriteString(value)
+			sb.WriteString("\t")
+		}
+	}
+	
+	// 将地理数据和其他数据合并
+	return sb.String() + otherData, nil
 }
 
 // 解包MessagePack数据
-func Unpack(geoMapData []byte, columnSelection int32, region []byte, regionSize int) (int, error) {
-	if len(geoMapData) == 0 {
-		copy(region, []byte("No geo data available"))
-		return len("No geo data available"), nil
-	}
-	
-	var obj interface{}
-	err := msgpack.Unmarshal(geoMapData, &obj)
-	if err != nil {
-		errMsg := fmt.Sprintf("msgpack error: %v", err)
-		copy(region, []byte(errMsg))
-		return len(errMsg), nil
-	}
-	
-	// 将解包的数据转换为字符串
-	result := fmt.Sprintf("%v", obj)
-	if len(result) > regionSize {
-		result = result[:regionSize]
-	}
-	
-	// 将结果复制到region缓冲区
-	copy(region, []byte(result))
-	return len(result), nil
+func Unpack(geoMapData []byte, columnSelection int32, data []byte) (string, error) {
+	return GetActualGeo(geoMapData, columnSelection, 0, 0, data, len(data))
 } 
