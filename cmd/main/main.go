@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/cz88/czdb-search-golang/pkg/db"
-	"github.com/cz88/czdb-search-golang/pkg/utils"
+	"github.com/tagphi/czdb-search-golang/pkg/db"
+	"github.com/tagphi/czdb-search-golang/pkg/utils"
 )
 
 func main() {

@@ -1,4 +1,4 @@
-module github.com/cz88/czdb-search-golang
+module github.com/tagphi/czdb-search-golang
 
 go 1.19
 

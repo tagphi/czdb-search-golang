@@ -2,6 +2,45 @@
 
 一个用于搜索CZDB格式IP数据库的Go语言实现。
 
+## 安装
+
+使用Go模块安装这个库:
+
+```bash
+go get github.com/tagphi/czdb-search-golang
+```
+
+## 作为库使用
+
+在您的Go代码中引入并使用此库:
+
+```go
+package main
+
+import (
+	"fmt"
+	"github.com/tagphi/czdb-search-golang/pkg/db"
+)
+
+func main() {
+	// 初始化数据库搜索器，使用内存模式
+	dbSearcher, err := db.InitDBSearcher("./data.db", "mykey", db.MEMORY)
+	if err != nil {
+		fmt.Printf("初始化数据库搜索器失败: %v\n", err)
+		return
+	}
+	defer db.CloseDBSearcher(dbSearcher)
+
+	// 搜索IP地址
+	region, err := db.Search("8.8.8.8", dbSearcher)
+	if err != nil {
+		fmt.Printf("搜索失败: %v\n", err)
+	} else {
+		fmt.Printf("区域: %s\n", region)
+	}
+}
+```
+
 ## 项目结构
 
 ```
@@ -50,6 +89,17 @@ go build -o cz88-search ./cmd/main/main.go
 2. 输入IP地址进行查询
 3. 输入 `q` 或 `quit` 退出程序
 
+## 线程安全性
+
+库支持两种查询方式：Memory和Btree。
+
+- Memory模式：在此模式下，整个数据库被加载到内存中，是线程安全的。
+- Btree模式：在此模式下，数据库文件会在查询时被读取，不是线程安全的。这主要是因为DBSearcher结构体中保存了文件句柄，如果多个线程同时访问会导致文件指针错乱。
+
+建议：
+- 对于需要高性能的应用，使用Memory模式
+- 如果需要在多线程环境中使用Btree模式，每个线程应该创建自己的DBSearcher实例
+
 ## CZDB格式规范
 
 CZDB文件格式由以下几个部分组成：
@@ -61,4 +111,12 @@ CZDB文件格式由以下几个部分组成：
 6. 索引数据
 7. 地理数据
 
-详细的格式规范可参考相关文档。 
+详细的格式规范可参考相关文档。
+
+## 版本管理
+
+此库遵循语义化版本控制(Semantic Versioning)规范。您可以在Go模块中指定版本:
+
+```go
+require github.com/tagphi/czdb-search-golang v1.0.0
+``` 
