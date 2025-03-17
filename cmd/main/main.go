@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/cz88/czdb-search-golang/pkg/db"
+	"github.com/cz88/czdb-search-golang/pkg/utils"
 )
 
 func main() {
@@ -15,9 +16,27 @@ func main() {
 	dbPath := flag.String("p", "", "Path to CZDB database file")
 	key := flag.String("k", "", "Base64 encoded key for decryption")
 	mode := flag.String("m", "btree", "Search mode: 'memory' or 'btree'")
+	debug := flag.Bool("debug", false, "Enable debug output")
+	logFile := flag.String("log", "", "Log file for debug output (default: stdout)")
 
 	// 解析命令行参数
 	flag.Parse()
+
+	// 设置调试模式
+	utils.SetDebugEnabled(*debug)
+
+	// 如果指定了日志文件，则将调试输出重定向到文件
+	if *debug && *logFile != "" {
+		file, err := os.OpenFile(*logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			fmt.Printf("Error opening log file: %v\n", err)
+			fmt.Println("Debug output will be sent to stdout")
+		} else {
+			utils.SetDebugOutput(file)
+			defer file.Close()
+			fmt.Printf("Debug output will be written to %s\n", *logFile)
+		}
+	}
 
 	// 检查必要参数
 	if *dbPath == "" || *key == "" {
@@ -38,6 +57,10 @@ func main() {
 
 	// 初始化数据库搜索器
 	fmt.Printf("Initializing database searcher with file: %s\n", *dbPath)
+	if *debug {
+		fmt.Println("Debug mode enabled")
+	}
+	
 	dbSearcher, err := db.InitDBSearcher(*dbPath, *key, searchType)
 	if err != nil {
 		fmt.Printf("Error initializing database searcher: %v\n", err)
