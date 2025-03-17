@@ -14,6 +14,7 @@ const (
 // GetIntLong 从字节数组中指定位置读取一个32位整数（小端序）
 func GetIntLong(b []byte, offset int) int32 {
 	if offset+4 > len(b) {
+		Warning("Offset %d is out of bounds for slice of length %d\n", offset, len(b))
 		return 0
 	}
 	return int32(b[offset]) | int32(b[offset+1])<<8 | int32(b[offset+2])<<16 | int32(b[offset+3])<<24
@@ -51,18 +52,32 @@ func GetInt1(b []byte, offset int) int8 {
 
 // PrintBytesInHex prints a byte slice in hexadecimal format
 func PrintBytesInHex(bytes []byte) {
-	for _, b := range bytes {
-		fmt.Printf("%02x ", b)
+	if !DebugEnabled {
+		return
 	}
-	fmt.Println()
+	
+	debugLock.Lock()
+	defer debugLock.Unlock()
+	
+	for _, b := range bytes {
+		fmt.Fprintf(DebugOutput, "%02x ", b)
+	}
+	fmt.Fprintln(DebugOutput)
 }
 
 // PrintBytesInDecimal prints a byte slice in decimal format
 func PrintBytesInDecimal(bytes []byte) {
-	for _, b := range bytes {
-		fmt.Printf("%d ", b)
+	if !DebugEnabled {
+		return
 	}
-	fmt.Println()
+	
+	debugLock.Lock()
+	defer debugLock.Unlock()
+	
+	for _, b := range bytes {
+		fmt.Fprintf(DebugOutput, "%d ", b)
+	}
+	fmt.Fprintln(DebugOutput)
 }
 
 // GetIPBytes converts an IP string to its byte representation

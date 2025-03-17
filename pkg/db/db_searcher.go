@@ -92,7 +92,7 @@ func parseSuperBlock(data []byte) (*SuperBlock, error) {
 	}
 	
 	// 打印调试信息
-	fmt.Printf("Debug: Parsed SuperBlock: Type=%d, Size=%d, StartPtr=%d, HeaderSize=%d, EndPtr=%d\n", 
+	utils.Debug("Debug: Parsed SuperBlock: Type=%d, Size=%d, StartPtr=%d, HeaderSize=%d, EndPtr=%d\n", 
 		superBlock.DbType, superBlock.DbSize, superBlock.StartIndexPtr, superBlock.HeaderBlockSize, superBlock.EndIndexPtr)
 	
 	return superBlock, nil
@@ -111,7 +111,7 @@ func initBtreeModeParam(file *os.File, offset int64, superBlock *SuperBlock) (*B
 	
 	// 检查文件大小是否匹配
 	if int64(superBlock.DbSize) != realFileSize {
-		fmt.Printf("Warning: db file size mismatch, expected [%d], real [%d]\n", superBlock.DbSize, realFileSize)
+		utils.Warning("db file size mismatch, expected [%d], real [%d]\n", superBlock.DbSize, realFileSize)
 	}
 	
 	// 读取HeaderBlock
@@ -131,7 +131,7 @@ func initBtreeModeParam(file *os.File, offset int64, superBlock *SuperBlock) (*B
 		return nil, fmt.Errorf("failed to read HeaderBlock: %v", err)
 	}
 	if bytesRead < int(headerBlockSize) {
-		fmt.Printf("Warning: incomplete HeaderBlock read: %d of %d bytes\n", bytesRead, headerBlockSize)
+		utils.Warning("incomplete HeaderBlock read: %d of %d bytes\n", bytesRead, headerBlockSize)
 		b = b[:bytesRead]
 	}
 	
@@ -199,11 +199,11 @@ func loadGeoMapping(dbSearcher *DBSearcher, offset int64) error {
 	
 	// 设置 ColumnSelection
 	dbSearcher.ColumnSelection = utils.GetIntLong(columnSelectionBytes, 0)
-	fmt.Printf("Debug: Column Selection: %d\n", dbSearcher.ColumnSelection)
+	utils.Debug("Debug: Column Selection: %d\n", dbSearcher.ColumnSelection)
 	
 	// column selection == 0 表示不使用地理映射
 	if dbSearcher.ColumnSelection == 0 {
-		fmt.Println("Warning: Column Selection is 0, not using geo mapping")
+		utils.Warning("Column Selection is 0, not using geo mapping\n")
 		dbSearcher.GeoMapData = make([]byte, 0)
 		return nil
 	}
@@ -211,7 +211,7 @@ func loadGeoMapping(dbSearcher *DBSearcher, offset int64) error {
 	// 计算地理数据起始位置 - 修正为正确位置
 	// 地理数据位于 ColumnSelection 之后
 	geoDataStart := columnSelectionPtr + 4
-	fmt.Printf("Debug: Geo data start position: %d\n", geoDataStart)
+	utils.Debug("Debug: Geo data start position: %d\n", geoDataStart)
 	
 	// 跳转到地理数据起始位置
 	_, err = file.Seek(geoDataStart, io.SeekStart)
@@ -230,30 +230,29 @@ func loadGeoMapping(dbSearcher *DBSearcher, offset int64) error {
 	}
 	
 	geoSize := utils.GetIntLong(geoSizeBytes, 0)
-	fmt.Printf("Debug: Geo map size: %d bytes\n", geoSize)
+	utils.Debug("Debug: Geo map size: %d bytes\n", geoSize)
 	
 	// 检查地理数据大小
 	if geoSize <= 0 {
-		fmt.Println("Warning: No geo data available")
+		utils.Warning("No geo data available\n")
 		dbSearcher.GeoMapData = make([]byte, 0)
 		return nil
 	}
 	
 	// 限制地理数据大小，防止内存溢出
 	if geoSize > 100000000 {
-		fmt.Printf("Warning: Geo data size too large (%d), limiting to 100MB\n", geoSize)
+		utils.Warning("Geo data size too large (%d), limiting to 100MB\n", geoSize)
 		geoSize = 100000000 // 限制为100MB
 	}
 	
 	// 读取加密的地理数据
 	encryptedGeoBytes := make([]byte, geoSize)
 	bytesRead, err = file.Read(encryptedGeoBytes)
-	if err != nil && err != io.EOF {
-		return fmt.Errorf("failed to read encrypted geo data: %v", err)
+	if err != nil {
+		return fmt.Errorf("failed to read geo data: %v", err)
 	}
-	
 	if bytesRead < int(geoSize) {
-		fmt.Printf("Warning: Read %d of %d bytes for geo data\n", bytesRead, geoSize)
+		utils.Warning("Read %d of %d bytes for geo data\n", bytesRead, geoSize)
 		encryptedGeoBytes = encryptedGeoBytes[:bytesRead]
 	}
 	
@@ -263,7 +262,7 @@ func loadGeoMapping(dbSearcher *DBSearcher, offset int64) error {
 		return fmt.Errorf("failed to decode key: %v", err)
 	}
 	
-	fmt.Printf("Debug: Key length (after base64 decode): %d bytes\n", len(keyBytes))
+	utils.Debug("Debug: Key length (after base64 decode): %d bytes\n", len(keyBytes))
 	
 	// 逐字节异或解密
 	decryptedGeoBytes := make([]byte, len(encryptedGeoBytes))
@@ -271,7 +270,7 @@ func loadGeoMapping(dbSearcher *DBSearcher, offset int64) error {
 		decryptedGeoBytes[i] = encryptedGeoBytes[i] ^ keyBytes[i%len(keyBytes)]
 	}
 	
-	fmt.Printf("Debug: Loaded and decrypted %d bytes of geo data\n", len(decryptedGeoBytes))
+	utils.Debug("Debug: Loaded and decrypted %d bytes of geo data\n", len(decryptedGeoBytes))
 	
 	// 设置地理数据
 	dbSearcher.GeoMapData = decryptedGeoBytes
@@ -292,7 +291,7 @@ func InitDBSearcher(dbPath string, key string, searchType SearchType) (*DBSearch
 		return nil, fmt.Errorf("failed to get file info: %v", err)
 	}
 	fileSize := fileInfo.Size()
-	fmt.Printf("Database file size: %d bytes\n", fileSize)
+	utils.Debug("Database file size: %d bytes\n", fileSize)
 	
 	// 创建数据库搜索器
 	dbSearcher := &DBSearcher{
@@ -358,9 +357,9 @@ func InitDBSearcher(dbPath string, key string, searchType SearchType) (*DBSearch
 	dbSearcher.HeaderBlockSize = superBlock.HeaderBlockSize
 	dbSearcher.IndexLength = int32(dbSearcher.IPBytesLength*2 + 5) // 计算索引长度
 	
-	fmt.Printf("Debug: IPType: %d, IPBytesLength: %d\n", dbSearcher.IPType, dbSearcher.IPBytesLength)
-	fmt.Printf("Debug: SuperBlock HeaderBlockSize: %d\n", superBlock.HeaderBlockSize)
-	fmt.Printf("Debug: StartIndexPtr: %d, EndIndexPtr: %d\n", dbSearcher.StartIndexPtr, dbSearcher.EndIndexPtr)
+	utils.Debug("Debug: IPType: %d, IPBytesLength: %d\n", dbSearcher.IPType, dbSearcher.IPBytesLength)
+	utils.Debug("Debug: SuperBlock HeaderBlockSize: %d\n", superBlock.HeaderBlockSize)
+	utils.Debug("Debug: StartIndexPtr: %d, EndIndexPtr: %d\n", dbSearcher.StartIndexPtr, dbSearcher.EndIndexPtr)
 	
 	// 初始化B-tree模式参数，传递已解析的SuperBlock
 	btreeModeParam, err := initBtreeModeParam(file, offset, superBlock)
@@ -387,248 +386,26 @@ func Search(ip string, dbSearcher *DBSearcher) (string, error) {
 		return "", fmt.Errorf("dbSearcher is nil")
 	}
 	
+	// 根据搜索类型调用对应的搜索方法
 	if dbSearcher.SearchType == MEMORY {
-		// 内存模式搜索
-		return MemorySearch(dbSearcher, ip)
+		return TreeSearch(dbSearcher, ip, true)
 	} else if dbSearcher.SearchType == BTREE {
-		// B-tree模式搜索
-		return BTreeSearch(dbSearcher, ip)
+		return TreeSearch(dbSearcher, ip, false)
 	}
 	
 	return "", fmt.Errorf("unsupported search type")
 }
 
-// 内存模式搜索
-func MemorySearch(dbSearcher *DBSearcher, ip string) (string, error) {
-	// 将IP转换为uint32
-	ipLong, err := ipToUint32(ip)
-	if err != nil {
-		return "", fmt.Errorf("invalid IP address format: %v", err)
-	}
-	
-	fmt.Printf("Debug: Searching for IP: %s (Decimal: %d) in memory mode\n", ip, ipLong)
-	
-	// 懒加载方式，如果DBBin为空，则一次性读取整个数据库文件到内存
-	if dbSearcher.DBBin == nil || len(dbSearcher.DBBin) == 0 {
-		err = loadDBIntoMemory(dbSearcher)
-		if err != nil {
-			return "", fmt.Errorf("failed to load database into memory: %v", err)
-		}
-	}
-	
-	// 准备IP字节
-	ipBytes := make([]byte, dbSearcher.IPBytesLength)
-	if dbSearcher.IPType == int32(utils.IPV4) {
-		// IPv4
-		ipAddr := net.ParseIP(ip).To4()
-		if ipAddr == nil {
-			return "", fmt.Errorf("invalid IPv4 address: %s", ip)
-		}
-		copy(ipBytes, ipAddr)
-	} else {
-		// IPv6
-		ipAddr := net.ParseIP(ip)
-		if ipAddr == nil {
-			return "", fmt.Errorf("invalid IPv6 address: %s", ip)
-		}
-		copy(ipBytes, ipAddr)
-	}
-	
-	// 从内存中二分查找
-	indexStart := int(dbSearcher.StartIndexPtr)
-	indexEnd := int(dbSearcher.EndIndexPtr)
-	indexLength := int(dbSearcher.IndexLength)
-	dataStart := SuperPartLength // 索引从SuperBlock之后开始
-	
-	fmt.Printf("Debug: Memory search parameters - IndexStart: %d, IndexEnd: %d, IndexLength: %d\n", 
-		indexStart, indexEnd, indexLength)
-	
-	// 二分查找
-	low, high := 0, (indexEnd - indexStart) / indexLength
-	found := false
-	var dataPtr uint32
-	var dataLen uint8
-	
-	for low <= high {
-		mid := (low + high) / 2
-		offset := indexStart + mid * indexLength
-		
-		if dataStart + offset + dbSearcher.IPBytesLength * 2 + 5 > len(dbSearcher.DBBin) {
-			return "", fmt.Errorf("index offset out of bounds: %d", offset)
-		}
-		
-		// 读取起始IP和结束IP
-		startIP := dbSearcher.DBBin[dataStart + offset : dataStart + offset + dbSearcher.IPBytesLength]
-		endIP := dbSearcher.DBBin[dataStart + offset + dbSearcher.IPBytesLength : dataStart + offset + dbSearcher.IPBytesLength * 2]
-		
-		// 比较IP
-		if dbSearcher.IPType == int32(utils.IPV4) {
-			// 对于IPv4
-			startIPLong := uint32(startIP[0])<<24 | uint32(startIP[1])<<16 | uint32(startIP[2])<<8 | uint32(startIP[3])
-			endIPLong := uint32(endIP[0])<<24 | uint32(endIP[1])<<16 | uint32(endIP[2])<<8 | uint32(endIP[3])
-			
-			if ipLong < startIPLong {
-				high = mid - 1
-			} else if ipLong > endIPLong {
-				low = mid + 1
-			} else {
-				// IP在范围内
-				dataPos := dataStart + offset + dbSearcher.IPBytesLength * 2
-				
-				// 读取数据长度和指针 - 根据白皮书规范处理
-				dataLen = dbSearcher.DBBin[dataPos]
-				
-				// 指针是4字节小端序，但我们只使用低24位
-				dataPtr = uint32(dbSearcher.DBBin[dataPos+1]) |
-					uint32(dbSearcher.DBBin[dataPos+2])<<8 |
-					uint32(dbSearcher.DBBin[dataPos+3])<<16
-					
-				fmt.Printf("Debug: Found data pointer at offset %d: len=%d, ptr=%d\n", 
-					dataPos, dataLen, dataPtr)
-				
-				found = true
-				break
-			}
-		} else {
-			// 对于IPv6
-			cmpStart := compareBytes(ipBytes, startIP, dbSearcher.IPBytesLength)
-			cmpEnd := compareBytes(ipBytes, endIP, dbSearcher.IPBytesLength)
-			
-			if cmpStart < 0 {
-				high = mid - 1
-			} else if cmpEnd > 0 {
-				low = mid + 1
-			} else {
-				// IP在范围内
-				dataPos := dataStart + offset + dbSearcher.IPBytesLength * 2
-				
-				// 读取数据长度和指针 - 根据白皮书规范处理
-				dataLen = dbSearcher.DBBin[dataPos]
-				
-				// 指针是4字节小端序，但我们只使用低24位
-				dataPtr = uint32(dbSearcher.DBBin[dataPos+1]) |
-					uint32(dbSearcher.DBBin[dataPos+2])<<8 |
-					uint32(dbSearcher.DBBin[dataPos+3])<<16
-				
-				fmt.Printf("Debug: Found data pointer at offset %d: len=%d, ptr=%d\n", 
-					dataPos, dataLen, dataPtr)
-					
-				found = true
-				break
-			}
-		}
-	}
-	
-	if !found {
-		return "IP not found", nil
-	}
-	
-	// 检查数据指针和长度
-	if dataPtr == 0 || dataLen == 0 {
-		return "", fmt.Errorf("invalid data pointer or length: ptr=%d, len=%d", dataPtr, dataLen)
-	}
-	
-	// 检查指针是否有效
-	if int(dataPtr) >= len(dbSearcher.GeoMapData) {
-		return "", fmt.Errorf("geo pointer out of bounds: ptr=%d, len=%d, dataSize=%d",
-			dataPtr, dataLen, len(dbSearcher.GeoMapData))
-	}
-
-	if int(dataPtr) + int(dataLen) > len(dbSearcher.GeoMapData) {
-		return "", fmt.Errorf("geo data exceeds buffer bounds: ptr=%d, len=%d, dataSize=%d",
-			dataPtr, dataLen, len(dbSearcher.GeoMapData))
-	}
-	
-	// 从数据库二进制文件中读取数据
-	data := make([]byte, dataLen)
-	
-	// 从内存或文件中复制数据
-	if dbSearcher.SearchType == MEMORY {
-		copy(data, dbSearcher.DBBin[dataPtr:dataPtr+uint32(dataLen)])
-	} else {
-		// 如果不是内存模式，从文件读取
-		_, err := dbSearcher.File.Seek(int64(dataPtr)+dbSearcher.FileOffset, io.SeekStart)
-		if err != nil {
-			return "", fmt.Errorf("failed to seek to data position: %v", err)
-		}
-		_, err = dbSearcher.File.Read(data)
-		if err != nil {
-			return "", fmt.Errorf("failed to read data: %v", err)
-		}
-	}
-	
-	// 获取地理信息
-	geoData, err := GetActualGeo(dbSearcher.GeoMapData, dbSearcher.ColumnSelection, int(dataPtr), int(dataLen), data, int(dataLen))
-	if err != nil {
-		return "", fmt.Errorf("failed to get geo data: %v", err)
-	}
-	
-	// 清理结果字符串，移除非打印字符
-	geoData = cleanString(geoData)
-	
-	return geoData, nil
-}
-
-// 将数据库文件加载到内存
-func loadDBIntoMemory(dbSearcher *DBSearcher) error {
-	// 获取文件大小
-	fileInfo, err := dbSearcher.File.Stat()
-	if err != nil {
-		return fmt.Errorf("failed to get file info: %v", err)
-	}
-	fileSize := fileInfo.Size()
-	
-	fmt.Printf("Loading database into memory (size: %d bytes)...\n", fileSize - dbSearcher.FileOffset)
-	
-	// 从文件偏移位置开始读取数据
-	_, err = dbSearcher.File.Seek(dbSearcher.FileOffset, io.SeekStart)
-	if err != nil {
-		return fmt.Errorf("failed to seek to file offset: %v", err)
-	}
-	
-	// 分配内存
-	dbSearcher.DBBin = make([]byte, fileSize - dbSearcher.FileOffset)
-	
-	// 读取数据
-	bytesRead, err := dbSearcher.File.Read(dbSearcher.DBBin)
-	if err != nil && err != io.EOF {
-		return fmt.Errorf("failed to read file into memory: %v", err)
-	}
-	
-	if int64(bytesRead) < fileSize - dbSearcher.FileOffset {
-		fmt.Printf("Warning: Read %d of %d bytes into memory\n", bytesRead, fileSize - dbSearcher.FileOffset)
-		dbSearcher.DBBin = dbSearcher.DBBin[:bytesRead]
-	}
-	
-	fmt.Printf("Database loaded into memory successfully (%d bytes)\n", bytesRead)
-	return nil
-}
-
-// 将IP转换为uint32
-func ipToUint32(ipstr string) (uint32, error) {
-	ip := net.ParseIP(ipstr)
-	if ip == nil {
-		return 0, fmt.Errorf("invalid IP address: %s", ipstr)
-	}
-	ip = ip.To4()
-	if ip == nil {
-		return 0, fmt.Errorf("not an IPv4 address: %s", ipstr)
-	}
-	
-	var result uint32
-	result = uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
-	return result, nil
-}
-
-// B-tree模式搜索
-func BTreeSearch(dbSearcher *DBSearcher, ip string) (string, error) {
+// TreeSearch 统一的搜索函数，使用 memoryMode 标志指示数据源
+func TreeSearch(dbSearcher *DBSearcher, ip string, memoryMode bool) (string, error) {
 	// 检查IP类型
 	ipLong, err := ipToUint32(ip)
 	if err != nil {
 		return "", fmt.Errorf("invalid IP address format: %v", err)
 	}
 	
-	fmt.Printf("Debug: Searching for IP: %s (Decimal: %d) in btree mode\n", ip, ipLong)
+	utils.Debug("Debug: Searching for IP: %s (Decimal: %d) in %s mode\n", 
+		ip, ipLong, map[bool]string{true: "memory", false: "btree"}[memoryMode])
 	
 	// 准备IP字节
 	ipBytes := make([]byte, dbSearcher.IPBytesLength)
@@ -648,11 +425,20 @@ func BTreeSearch(dbSearcher *DBSearcher, ip string) (string, error) {
 		copy(ipBytes, ipAddr)
 	}
 	
-	// 二分查找
+	// 如果是内存模式，且DBBin为空，则加载数据库到内存
+	if memoryMode && (dbSearcher.DBBin == nil || len(dbSearcher.DBBin) == 0) {
+		err = loadDBIntoMemory(dbSearcher)
+		if err != nil {
+			return "", fmt.Errorf("failed to load database into memory: %v", err)
+		}
+	}
+	
+	// 初始化B-tree搜索
 	param := dbSearcher.BtreeModeParam
 	l, h := 0, param.HeaderLength-1
 	sptr, eptr := int32(0), int32(0)
 	
+	// 在头部块中进行二分查找
 	for l <= h {
 		m := (l + h) / 2
 		
@@ -663,12 +449,17 @@ func BTreeSearch(dbSearcher *DBSearcher, ip string) (string, error) {
 		} else if cmp > 0 {
 			l = m + 1
 		} else {
-			sptr = param.HeaderPtr[m-1]
+			if m > 0 {
+				sptr = param.HeaderPtr[m-1]
+			} else {
+				sptr = param.HeaderPtr[m]
+			}
 			eptr = param.HeaderPtr[m]
 			break
 		}
 	}
 	
+	// 如果没有精确匹配，确定包含该IP的区间
 	if l > h {
 		if l < param.HeaderLength {
 			sptr = param.HeaderPtr[l-1]
@@ -691,19 +482,30 @@ func BTreeSearch(dbSearcher *DBSearcher, ip string) (string, error) {
 	blockLen := eptr - sptr
 	blen := dbSearcher.IndexLength
 	
-	// 从文件读取索引
-	_, err = dbSearcher.File.Seek(int64(sptr)+dbSearcher.FileOffset, io.SeekStart)
-	if err != nil {
-		return "", fmt.Errorf("failed to seek to index position: %v", err)
-	}
+	var indexBuffer []byte
 	
-	indexBuffer := make([]byte, blockLen)
-	bytesRead, err := dbSearcher.File.Read(indexBuffer)
-	if err != nil {
-		return "", fmt.Errorf("failed to read index buffer: %v", err)
-	}
-	if bytesRead < int(blockLen) {
-		return "", fmt.Errorf("incomplete index buffer read: %d of %d bytes", bytesRead, blockLen)
+	// 根据模式选择从内存或文件读取索引数据
+	if memoryMode {
+		// 从内存中读取
+		if int(sptr) >= len(dbSearcher.DBBin) {
+			return "", fmt.Errorf("index pointer out of bounds: %d", sptr)
+		}
+		indexBuffer = dbSearcher.DBBin[sptr:sptr+blockLen]
+	} else {
+		// 从文件读取索引
+		_, err = dbSearcher.File.Seek(int64(sptr)+dbSearcher.FileOffset, io.SeekStart)
+		if err != nil {
+			return "", fmt.Errorf("failed to seek to index position: %v", err)
+		}
+		
+		indexBuffer = make([]byte, blockLen)
+		bytesRead, err := dbSearcher.File.Read(indexBuffer)
+		if err != nil {
+			return "", fmt.Errorf("failed to read index buffer: %v", err)
+		}
+		if bytesRead < int(blockLen) {
+			return "", fmt.Errorf("incomplete index buffer read: %d of %d bytes", bytesRead, blockLen)
+		}
 	}
 	
 	// 二分查找索引块
@@ -732,11 +534,17 @@ func BTreeSearch(dbSearcher *DBSearcher, ip string) (string, error) {
 			// IP在这个块中
 			dataPos := offset + dbSearcher.IPBytesLength*2
 			
-			// 获取4字节的数据指针和1字节的数据长度
-			dataPtr = uint32(utils.GetIntLong(indexBuffer, dataPos))
-			dataLen = uint8(utils.GetInt1(indexBuffer, dataPos+4))
+			// 获取4字节的数据指针(偏移量在dataPos处)和1字节的数据长度(偏移量在dataPos+4处)
+			// 参考Java: dataPtr = getIntLong(iBuffer, p + ipBytesLength * 2);
+			//          dataLen = getInt1(iBuffer, p + ipBytesLength * 2 + 4);
+			dataPtr = uint32(indexBuffer[dataPos]) |
+				uint32(indexBuffer[dataPos+1])<<8 |
+				uint32(indexBuffer[dataPos+2])<<16 |
+				uint32(indexBuffer[dataPos+3])<<24
 			
-			fmt.Printf("Debug: Found data pointer in btree mode: len=%d, ptr=%d\n", dataLen, dataPtr)
+			dataLen = indexBuffer[dataPos+4]
+			
+			utils.Debug("Debug: Found data pointer: ptr=%d, len=%d\n", dataPtr, dataLen)
 			
 			found = true
 			break
@@ -758,7 +566,7 @@ func BTreeSearch(dbSearcher *DBSearcher, ip string) (string, error) {
 		return "", fmt.Errorf("invalid data pointer or length: ptr=%d, len=%d", dataPtr, dataLen)
 	}
 	
-	// 读取地理位置数据
+	// 检查地理数据指针是否有效
 	if int(dataPtr) >= len(dbSearcher.GeoMapData) {
 		return "", fmt.Errorf("geo pointer out of bounds: ptr=%d, len=%d, dataSize=%d",
 			dataPtr, dataLen, len(dbSearcher.GeoMapData))
@@ -769,17 +577,26 @@ func BTreeSearch(dbSearcher *DBSearcher, ip string) (string, error) {
 			dataPtr, dataLen, len(dbSearcher.GeoMapData))
 	}
 	
-	// 从文件读取数据
+	// 读取数据
 	data := make([]byte, dataLen)
 	
-	// 从文件中读取数据
-	_, err = dbSearcher.File.Seek(int64(dataPtr)+dbSearcher.FileOffset, io.SeekStart)
-	if err != nil {
-		return "", fmt.Errorf("failed to seek to data position: %v", err)
-	}
-	_, err = dbSearcher.File.Read(data)
-	if err != nil {
-		return "", fmt.Errorf("failed to read data: %v", err)
+	// 根据模式选择从内存或文件读取数据
+	if memoryMode {
+		// 从内存中读取数据
+		if int(dataPtr) >= len(dbSearcher.DBBin) {
+			return "", fmt.Errorf("data pointer out of bounds: %d", dataPtr)
+		}
+		copy(data, dbSearcher.DBBin[dataPtr:dataPtr+uint32(dataLen)])
+	} else {
+		// 从文件读取数据
+		_, err = dbSearcher.File.Seek(int64(dataPtr)+dbSearcher.FileOffset, io.SeekStart)
+		if err != nil {
+			return "", fmt.Errorf("failed to seek to data position: %v", err)
+		}
+		_, err = dbSearcher.File.Read(data)
+		if err != nil {
+			return "", fmt.Errorf("failed to read data: %v", err)
+		}
 	}
 	
 	// 获取地理信息
@@ -789,6 +606,69 @@ func BTreeSearch(dbSearcher *DBSearcher, ip string) (string, error) {
 	}
 	
 	return geoData, nil
+}
+
+// 内存模式搜索
+func MemorySearch(dbSearcher *DBSearcher, ip string) (string, error) {
+	// 已被合并到 TreeSearch 中，保留此函数以保持向后兼容
+	return TreeSearch(dbSearcher, ip, true)
+}
+
+// B-tree模式搜索
+func BTreeSearch(dbSearcher *DBSearcher, ip string) (string, error) {
+	// 已被合并到 TreeSearch 中，保留此函数以保持向后兼容
+	return TreeSearch(dbSearcher, ip, false)
+}
+
+// 将数据库文件加载到内存
+func loadDBIntoMemory(dbSearcher *DBSearcher) error {
+	// 获取文件大小
+	fileInfo, err := dbSearcher.File.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to get file info: %v", err)
+	}
+	fileSize := fileInfo.Size()
+	
+	utils.Debug("Loading database into memory (size: %d bytes)...\n", fileSize - dbSearcher.FileOffset)
+	
+	// 从文件偏移位置开始读取数据
+	_, err = dbSearcher.File.Seek(dbSearcher.FileOffset, io.SeekStart)
+	if err != nil {
+		return fmt.Errorf("failed to seek to file offset: %v", err)
+	}
+	
+	// 分配内存
+	dbSearcher.DBBin = make([]byte, fileSize - dbSearcher.FileOffset)
+	
+	// 读取数据
+	bytesRead, err := dbSearcher.File.Read(dbSearcher.DBBin)
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("failed to read file into memory: %v", err)
+	}
+	
+	if int64(bytesRead) < fileSize - dbSearcher.FileOffset {
+		utils.Warning("Read %d of %d bytes into memory\n", bytesRead, fileSize - dbSearcher.FileOffset)
+		dbSearcher.DBBin = dbSearcher.DBBin[:bytesRead]
+	}
+	
+	utils.Debug("Database loaded into memory successfully (%d bytes)\n", bytesRead)
+	return nil
+}
+
+// 将IP转换为uint32
+func ipToUint32(ipstr string) (uint32, error) {
+	ip := net.ParseIP(ipstr)
+	if ip == nil {
+		return 0, fmt.Errorf("invalid IP address: %s", ipstr)
+	}
+	ip = ip.To4()
+	if ip == nil {
+		return 0, fmt.Errorf("not an IPv4 address: %s", ipstr)
+	}
+	
+	var result uint32
+	result = uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
+	return result, nil
 }
 
 // 比较字节数组
@@ -830,23 +710,23 @@ func CloseDBSearcher(dbSearcher *DBSearcher) {
 	}
 }
 
-// 打印数据库信息
+// Info 函数输出数据库信息
 func Info(dbSearcher *DBSearcher) {
-	fmt.Println("\n=========== Database Information ===========")
-	fmt.Printf("IP Type: %d\n", dbSearcher.IPType)
-	fmt.Printf("IP Bytes Length: %d\n", dbSearcher.IPBytesLength)
-	fmt.Printf("Start Index Pointer: %d\n", dbSearcher.StartIndexPtr)
-	fmt.Printf("End Index Pointer: %d\n", dbSearcher.EndIndexPtr)
-	fmt.Printf("Header Block Size: %d\n", dbSearcher.HeaderBlockSize)
-	fmt.Printf("Search Type: %s\n", searchTypeToString(dbSearcher.SearchType))
-	fmt.Printf("BTree Header Length: %d\n", dbSearcher.BtreeModeParam.HeaderLength)
-	fmt.Printf("Geo Map Data Size: %d bytes\n", len(dbSearcher.GeoMapData))
-	fmt.Println("===========================================")
-	fmt.Println("\nEnter IP addresses to look up their geographical locations.")
-	fmt.Println("Type 'q' or 'quit' to exit.")
+	utils.Debugln("\n=========== Database Information ===========")
+	utils.Debug("IP Type: %d\n", dbSearcher.IPType)
+	utils.Debug("IP Bytes Length: %d\n", dbSearcher.IPBytesLength)
+	utils.Debug("Start Index Pointer: %d\n", dbSearcher.StartIndexPtr)
+	utils.Debug("End Index Pointer: %d\n", dbSearcher.EndIndexPtr)
+	utils.Debug("Header Block Size: %d\n", dbSearcher.HeaderBlockSize)
+	utils.Debug("Search Type: %s\n", searchTypeToString(dbSearcher.SearchType))
+	utils.Debug("BTree Header Length: %d\n", dbSearcher.BtreeModeParam.HeaderLength)
+	utils.Debug("Geo Map Data Size: %d bytes\n", len(dbSearcher.GeoMapData))
+	utils.Debugln("===========================================")
+	utils.Debugln("\nEnter IP addresses to look up their geographical locations.")
+	utils.Debugln("Type 'q' or 'quit' to exit.")
 }
 
-// 将搜索类型转换为字符串
+// searchTypeToString 将搜索类型转换为字符串
 func searchTypeToString(searchType SearchType) string {
 	switch searchType {
 	case MEMORY:
@@ -858,12 +738,13 @@ func searchTypeToString(searchType SearchType) string {
 	}
 }
 
-// 解密数据
+// Decrypt 解密函数
 func Decrypt(encryptedBytes []byte, key string) []byte {
+	// 解密逻辑（异或解密）
 	keyBytes, err := base64.StdEncoding.DecodeString(key)
 	if err != nil {
-		fmt.Printf("Error decoding key: %v\n", err)
-		return encryptedBytes
+		utils.Warning("Error decoding key: %v\n", err)
+		return nil
 	}
 	
 	result := make([]byte, len(encryptedBytes))
