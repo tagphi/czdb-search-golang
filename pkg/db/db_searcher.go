@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strings"
 
@@ -419,6 +420,11 @@ func Search(ip string, dbSearcher *DBSearcher) (string, error) {
 //   - string: 地理位置信息
 //   - error: 如果搜索失败则返回错误
 func TreeSearch(dbSearcher *DBSearcher, ip string, memoryMode bool) (string, error) {
+	// 验证IP地址格式
+	if err := validateIPFormat(ip, dbSearcher.IPType); err != nil {
+		return "", err
+	}
+	
 	// 准备IP字节
 	ipBytes, err := utils.GetIPBytes(ip, int(dbSearcher.IPType))
 	if err != nil {
@@ -792,4 +798,33 @@ func GetActualGeo(geoMapData []byte, columnSelection int32, geoPtr int, geoLen i
 // 解包MessagePack数据
 func Unpack(geoMapData []byte, columnSelection int32, data []byte) (string, error) {
 	return GetActualGeo(geoMapData, columnSelection, 0, 0, data, len(data))
+}
+
+// validateIPFormat 验证IP地址格式是否符合指定类型
+// 参数:
+//   - ip: IP地址字符串
+//   - ipType: IP地址类型 (IPv4=4 或 IPv6=6)
+//
+// 返回:
+//   - error: 如果格式不符合则返回错误，否则返回nil
+func validateIPFormat(ip string, ipType int32) error {
+	parsedIP := net.ParseIP(ip)
+	if parsedIP == nil {
+		return fmt.Errorf("invalid IP address format: %s", ip)
+	}
+
+	if ipType == int32(utils.IPV4) {
+		if parsedIP.To4() == nil {
+			return fmt.Errorf("expected IPv4 address but got IPv6: %s", ip)
+		}
+	} else if ipType == int32(utils.IPV6) {
+		// For IPv6, To4() will return nil if it's a true IPv6 address
+		if parsedIP.To4() != nil {
+			return fmt.Errorf("expected IPv6 address but got IPv4: %s", ip)
+		}
+	} else {
+		return fmt.Errorf("unsupported IP type: %d", ipType)
+	}
+
+	return nil
 } 
