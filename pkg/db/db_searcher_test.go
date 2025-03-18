@@ -72,9 +72,9 @@ func TestCompareBytes(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		result := compareBytes(test.a, test.b, test.length)
+		result := utils.CompareBytes(test.a, test.b, test.length)
 		if result != test.expected {
-			t.Errorf("compareBytes(%v, %v, %d) = %d, 期望 %d", 
+			t.Errorf("utils.CompareBytes(%v, %v, %d) = %d, 期望 %d", 
 				test.a, test.b, test.length, result, test.expected)
 		}
 	}

@@ -2,10 +2,8 @@ package db
 
 import (
 	"bytes"
-	"encoding/base64"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"strings"
 
@@ -258,18 +256,13 @@ func loadGeoMapping(dbSearcher *DBSearcher, offset int64) error {
 		encryptedGeoBytes = encryptedGeoBytes[:bytesRead]
 	}
 	
-	// 解密地理数据 - 使用异或操作解密，按照白皮书描述
-	keyBytes, err := base64.StdEncoding.DecodeString(dbSearcher.DBKey)
-	if err != nil {
-		return fmt.Errorf("failed to decode key: %v", err)
-	}
+	// 解密地理数据 - 使用工具函数进行解密
+	utils.Debug("Debug: About to decrypt %d bytes of geo data\n", len(encryptedGeoBytes))
 	
-	utils.Debug("Debug: Key length (after base64 decode): %d bytes\n", len(keyBytes))
-	
-	// 逐字节异或解密
-	decryptedGeoBytes := make([]byte, len(encryptedGeoBytes))
-	for i := 0; i < len(encryptedGeoBytes); i++ {
-		decryptedGeoBytes[i] = encryptedGeoBytes[i] ^ keyBytes[i%len(keyBytes)]
+	// 使用工具函数进行解密
+	decryptedGeoBytes := utils.DecryptWithBase64Key(encryptedGeoBytes, dbSearcher.DBKey)
+	if decryptedGeoBytes == nil {
+		return fmt.Errorf("failed to decrypt geo data")
 	}
 	
 	utils.Debug("Debug: Loaded and decrypted %d bytes of geo data\n", len(decryptedGeoBytes))
@@ -426,31 +419,10 @@ func Search(ip string, dbSearcher *DBSearcher) (string, error) {
 //   - string: 地理位置信息
 //   - error: 如果搜索失败则返回错误
 func TreeSearch(dbSearcher *DBSearcher, ip string, memoryMode bool) (string, error) {
-	// 检查IP类型
-	ipLong, err := ipToUint32(ip)
-	if err != nil {
-		return "", fmt.Errorf("invalid IP address format: %v", err)
-	}
-	
-	utils.Debug("Debug: Searching for IP: %s (Decimal: %d) in %s mode\n", 
-		ip, ipLong, map[bool]string{true: "memory", false: "btree"}[memoryMode])
-	
 	// 准备IP字节
-	ipBytes := make([]byte, dbSearcher.IPBytesLength)
-	if dbSearcher.IPType == int32(utils.IPV4) {
-		// IPv4
-		ipAddr := net.ParseIP(ip).To4()
-		if ipAddr == nil {
-			return "", fmt.Errorf("invalid IPv4 address: %s", ip)
-		}
-		copy(ipBytes, ipAddr)
-	} else {
-		// IPv6
-		ipAddr := net.ParseIP(ip)
-		if ipAddr == nil {
-			return "", fmt.Errorf("invalid IPv6 address: %s", ip)
-		}
-		copy(ipBytes, ipAddr)
+	ipBytes, err := utils.GetIPBytes(ip, int(dbSearcher.IPType))
+	if err != nil {
+		return "", fmt.Errorf("invalid IP address: %s, error: %v", ip, err)
 	}
 	
 	// 如果是内存模式，且DBBin为空，则加载数据库到内存
@@ -471,7 +443,7 @@ func TreeSearch(dbSearcher *DBSearcher, ip string, memoryMode bool) (string, err
 		m := (l + h) / 2
 		
 		// 比较IP
-		cmp := compareBytes(ipBytes, param.HeaderSip[m], dbSearcher.IPBytesLength)
+		cmp := utils.CompareBytes(ipBytes, param.HeaderSip[m], dbSearcher.IPBytesLength)
 		if cmp < 0 {
 			h = m - 1
 		} else if cmp > 0 {
@@ -555,8 +527,8 @@ func TreeSearch(dbSearcher *DBSearcher, ip string, memoryMode bool) (string, err
 		endIP := indexBuffer[offset+dbSearcher.IPBytesLength:offset+dbSearcher.IPBytesLength*2]
 		
 		// 使用统一的比较方法，无论是IPv4还是IPv6
-		cmpStart := compareBytes(ipBytes, startIP, dbSearcher.IPBytesLength)
-		cmpEnd := compareBytes(ipBytes, endIP, dbSearcher.IPBytesLength)
+		cmpStart := utils.CompareBytes(ipBytes, startIP, dbSearcher.IPBytesLength)
+		cmpEnd := utils.CompareBytes(ipBytes, endIP, dbSearcher.IPBytesLength)
 		
 		if cmpStart >= 0 && cmpEnd <= 0 {
 			// IP在这个块中
@@ -592,17 +564,6 @@ func TreeSearch(dbSearcher *DBSearcher, ip string, memoryMode bool) (string, err
 	// 检查数据指针和长度
 	if dataPtr == 0 || dataLen == 0 {
 		return "", fmt.Errorf("invalid data pointer or length: ptr=%d, len=%d", dataPtr, dataLen)
-	}
-	
-	// 检查地理数据指针是否有效
-	if int(dataPtr) >= len(dbSearcher.GeoMapData) {
-		return "", fmt.Errorf("geo pointer out of bounds: ptr=%d, len=%d, dataSize=%d",
-			dataPtr, dataLen, len(dbSearcher.GeoMapData))
-	}
-	
-	if int(dataPtr)+int(dataLen) > len(dbSearcher.GeoMapData) {
-		return "", fmt.Errorf("geo data exceeds buffer bounds: ptr=%d, len=%d, dataSize=%d",
-			dataPtr, dataLen, len(dbSearcher.GeoMapData))
 	}
 	
 	// 读取数据
@@ -699,40 +660,6 @@ func loadDBIntoMemory(dbSearcher *DBSearcher) error {
 	return nil
 }
 
-// 将IP转换为uint32
-func ipToUint32(ipstr string) (uint32, error) {
-	ip := net.ParseIP(ipstr)
-	if ip == nil {
-		return 0, fmt.Errorf("invalid IP address: %s", ipstr)
-	}
-	ip = ip.To4()
-	if ip == nil {
-		return 0, fmt.Errorf("not an IPv4 address: %s", ipstr)
-	}
-	
-	var result uint32
-	result = uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
-	return result, nil
-}
-
-// 比较字节数组
-func compareBytes(bytes1, bytes2 []byte, length int) int {
-	for i := 0; i < length; i++ {
-		if i >= len(bytes1) || i >= len(bytes2) {
-			break
-		}
-		
-		// 直接比较无符号字节值，这符合Go的byte(uint8)性质
-		// 并且适用于IP地址比较（IP地址字节通常被视为无符号值）
-		if bytes1[i] < bytes2[i] {
-			return -1
-		} else if bytes1[i] > bytes2[i] {
-			return 1
-		}
-	}
-	return 0
-}
-
 // 清理字符串
 func cleanString(s string) string {
 	var result strings.Builder
@@ -771,9 +698,6 @@ func Info(dbSearcher *DBSearcher) {
 	utils.Debug("Search Type: %s\n", searchTypeToString(dbSearcher.SearchType))
 	utils.Debug("BTree Header Length: %d\n", dbSearcher.BtreeModeParam.HeaderLength)
 	utils.Debug("Geo Map Data Size: %d bytes\n", len(dbSearcher.GeoMapData))
-	utils.Debugln("===========================================")
-	utils.Debugln("\nEnter IP addresses to look up their geographical locations.")
-	utils.Debugln("Type 'q' or 'quit' to exit.")
 }
 
 // searchTypeToString 将搜索类型转换为字符串
@@ -788,29 +712,9 @@ func searchTypeToString(searchType SearchType) string {
 	}
 }
 
-// Decrypt 解密函数
-func Decrypt(encryptedBytes []byte, key string) []byte {
-	// 解密逻辑（异或解密）
-	keyBytes, err := base64.StdEncoding.DecodeString(key)
-	if err != nil {
-		utils.Warning("Error decoding key: %v\n", err)
-		return nil
-	}
-	
-	result := make([]byte, len(encryptedBytes))
-	for i := 0; i < len(encryptedBytes); i++ {
-		result[i] = encryptedBytes[i] ^ keyBytes[i%len(keyBytes)]
-	}
-	return result
-}
-
 // 获取地理信息
 func GetActualGeo(geoMapData []byte, columnSelection int32, geoPtr int, geoLen int, data []byte, dataLen int) (string, error) {
-	if len(geoMapData) == 0 {
-		return "No geo data available", nil
-	}
-	
-	if geoPtr+geoLen > len(geoMapData) {
+	if columnSelection != 0 && geoPtr+geoLen > len(geoMapData) {
 		return "", fmt.Errorf("Geo pointer out of bounds: ptr=%d, len=%d, dataSize=%d", geoPtr, geoLen, len(geoMapData))
 	}
 	

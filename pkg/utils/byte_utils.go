@@ -3,6 +3,7 @@ package utils
 import (
 	"fmt"
 	"net"
+	"encoding/base64"
 )
 
 // IP type constants
@@ -111,10 +112,15 @@ func GetIPBytes(ip string, dbType int) ([]byte, error) {
 func CompareBytes(bytes1, bytes2 []byte, length int) int {
 	for i := 0; i < length; i++ {
 		if i >= len(bytes1) || i >= len(bytes2) {
-			return len(bytes1) - len(bytes2)
+			break
 		}
-		if bytes1[i] != bytes2[i] {
-			return int(bytes1[i]) - int(bytes2[i])
+		
+		// 直接比较无符号字节值，这符合Go的byte(uint8)性质
+		// 并且适用于IP地址比较（IP地址字节通常被视为无符号值）
+		if bytes1[i] < bytes2[i] {
+			return -1
+		} else if bytes1[i] > bytes2[i] {
+			return 1
 		}
 	}
 	return 0
@@ -134,4 +140,26 @@ func EncodeIP(ip net.IP) uint32 {
 		return 0
 	}
 	return uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
+}
+
+// DecryptWithBase64Key 解密函数，使用base64编码的密钥
+// 参数:
+//   - encryptedBytes: 要解密的字节数组
+//   - key: base64编码的密钥字符串
+//
+// 返回:
+//   - []byte: 解密后的字节数组
+func DecryptWithBase64Key(encryptedBytes []byte, key string) []byte {
+	// 解密逻辑（异或解密）
+	keyBytes, err := base64.StdEncoding.DecodeString(key)
+	if err != nil {
+		Warning("Error decoding key: %v\n", err)
+		return nil
+	}
+	
+	result := make([]byte, len(encryptedBytes))
+	for i := 0; i < len(encryptedBytes); i++ {
+		result[i] = encryptedBytes[i] ^ keyBytes[i%len(keyBytes)]
+	}
+	return result
 } 
