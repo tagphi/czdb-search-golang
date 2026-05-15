@@ -146,7 +146,7 @@ CZDB文件格式由以下几个部分组成：
 此库遵循语义化版本控制(Semantic Versioning)规范。您可以在Go模块中指定版本:
 
 ```go
-require github.com/tagphi/czdb-search-golang v1.0.0
+require github.com/tagphi/czdb-search-golang v1.0.5
 ```
 
 ## 贡献指南
