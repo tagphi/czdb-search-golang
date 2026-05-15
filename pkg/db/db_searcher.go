@@ -595,7 +595,7 @@ func TreeSearch(dbSearcher *DBSearcher, ip string, memoryMode bool) (string, err
 	}
 	
 	// 获取地理信息
-	geoData, err := GetActualGeo(dbSearcher.GeoMapData, dbSearcher.ColumnSelection, int(dataPtr), int(dataLen), data, int(dataLen))
+	geoData, err := GetActualGeo(dbSearcher.GeoMapData, dbSearcher.ColumnSelection, data)
 	if err != nil {
 		return "", fmt.Errorf("failed to get geo data: %v", err)
 	}
@@ -719,11 +719,7 @@ func searchTypeToString(searchType SearchType) string {
 }
 
 // 获取地理信息
-func GetActualGeo(geoMapData []byte, columnSelection int32, geoPtr int, geoLen int, data []byte, dataLen int) (string, error) {
-	if columnSelection != 0 && geoPtr+geoLen > len(geoMapData) {
-		return "", fmt.Errorf("Geo pointer out of bounds: ptr=%d, len=%d, dataSize=%d", geoPtr, geoLen, len(geoMapData))
-	}
-	
+func GetActualGeo(geoMapData []byte, columnSelection int32, data []byte) (string, error) {
 	// 使用msgpack直接解码，类似Java实现
 	dec := msgpack.NewDecoder(bytes.NewReader(data))
 	
@@ -744,17 +740,17 @@ func GetActualGeo(geoMapData []byte, columnSelection int32, geoPtr int, geoLen i
 		return otherData, nil
 	}
 	
-	// 提取地理指针和长度
-	dataLen = int((geoPosMixSize >> 24) & 0xFF)
-	dataPtr := int(geoPosMixSize & 0x00FFFFFF)
+	// 提取地理指针和长度（来自 msgpack 记录，非索引中的 DB 偏移）
+	geoLen := int((geoPosMixSize >> 24) & 0xFF)
+	geoPtr := int(geoPosMixSize & 0x00FFFFFF)
 	
 	// 检查索引是否有效
-	if dataPtr < 0 || dataPtr+dataLen > len(geoMapData) {
+	if geoPtr < 0 || geoPtr+geoLen > len(geoMapData) {
 		return otherData, nil // 索引无效时返回otherData
 	}
 	
 	// 从geoMapData中读取地理数据
-	regionData := geoMapData[dataPtr : dataPtr+dataLen]
+	regionData := geoMapData[geoPtr : geoPtr+geoLen]
 	
 	// 使用新的解码器解包地理数据
 	geoDec := msgpack.NewDecoder(bytes.NewReader(regionData))
@@ -797,7 +793,7 @@ func GetActualGeo(geoMapData []byte, columnSelection int32, geoPtr int, geoLen i
 
 // 解包MessagePack数据
 func Unpack(geoMapData []byte, columnSelection int32, data []byte) (string, error) {
-	return GetActualGeo(geoMapData, columnSelection, 0, 0, data, len(data))
+	return GetActualGeo(geoMapData, columnSelection, data)
 }
 
 // validateIPFormat 验证IP地址格式是否符合指定类型
