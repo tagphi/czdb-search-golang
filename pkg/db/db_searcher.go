@@ -487,43 +487,63 @@ func TreeSearch(dbSearcher *DBSearcher, ip string, memoryMode bool) (string, err
 	// 准备索引缓冲区
 	blockLen := eptr - sptr
 	blen := dbSearcher.IndexLength
-	
+
+	// 额外多读一个索引块，把右边界块也包含进来。
+	// 当查询 IP 恰好等于某个 header 分段的起始 IP 时，searchInHeader 返回的窗口为
+	// [HeaderPtr[m-1], HeaderPtr[m])，而目标索引块正好位于窗口右边界 eptr 处，
+	// 因此必须把 eptr 处的这个块也读进来，否则二分查找无法命中，导致返回 "IP not found"。
+	// 与 Java 版保持一致：iBuffer = new byte[blockLen + blen]（include the right border block）。
+	bufLen := blockLen + blen
+
 	var indexBuffer []byte
-	
+
 	// 根据模式选择从内存或文件读取索引数据
 	if memoryMode {
 		// 从内存中读取
 		if int(sptr) >= len(dbSearcher.DBBin) {
 			return "", fmt.Errorf("index pointer out of bounds: %d", sptr)
 		}
-		indexBuffer = dbSearcher.DBBin[sptr:sptr+blockLen]
+		end := int(sptr) + int(bufLen)
+		if end > len(dbSearcher.DBBin) {
+			end = len(dbSearcher.DBBin)
+		}
+		indexBuffer = dbSearcher.DBBin[int(sptr):end]
 	} else {
 		// 从文件读取索引
 		_, err = dbSearcher.File.Seek(int64(sptr)+dbSearcher.FileOffset, io.SeekStart)
 		if err != nil {
 			return "", fmt.Errorf("failed to seek to index position: %v", err)
 		}
-		
-		indexBuffer = make([]byte, blockLen)
-		bytesRead, err := dbSearcher.File.Read(indexBuffer)
-		if err != nil {
+
+		indexBuffer = make([]byte, bufLen)
+		bytesRead, err := io.ReadFull(dbSearcher.File, indexBuffer)
+		if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
 			return "", fmt.Errorf("failed to read index buffer: %v", err)
 		}
+		// 右边界块位于索引区末尾时可能读不满（last partition），按实际读取长度截断即可。
 		if bytesRead < int(blockLen) {
 			return "", fmt.Errorf("incomplete index buffer read: %d of %d bytes", bytesRead, blockLen)
 		}
+		indexBuffer = indexBuffer[:bytesRead]
 	}
-	
+
 	// 二分查找索引块
 	l, h = 0, int(blockLen/blen)
 	var dataPtr uint32
 	var dataLen uint8
 	found := false
-	
+
 	for l <= h {
 		m := (l + h) / 2
 		offset := m * int(blen)
-		
+
+		// 与 Java 版保持一致：if (p >= blockLen && m == 1) break;
+		// 最后一个分段不满，当 m==1 且偏移越过 blockLen 时直接退出，
+		// 避免把索引区之外（geo 数据等）误当作索引块比较。
+		if int32(offset) >= blockLen && m == 1 {
+			break
+		}
+
 		if offset+int(dbSearcher.IPBytesLength)*2+5 > len(indexBuffer) {
 			break
 		}
